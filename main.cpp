@@ -24,14 +24,14 @@
 using namespace cv;
 using namespace std;
 
-int bgr = 150;
+int thres = 450;
 
 void removeDepthWithoutColor(cv::Mat &depth, const cv::Mat &rgb){
     for (int i = 0; i < rgb.rows; ++i){
         for (int j = 0; j < rgb.cols; ++j){
-            unsigned char *pixel = rgb.ptr(i, j);
+            Point3_<uchar>* pixel = rgb.ptr<Point3_<uchar> >(i, j);
             unsigned char *pixelDepth = depth.ptr(i, j);
-            if(pixel[0] == 0){
+            if(pixel->x < 50 && pixel->y < 50 && pixel->z < 50){
                 pixelDepth[0] = 0;
                 pixelDepth[1] = 0;
             }
@@ -39,20 +39,28 @@ void removeDepthWithoutColor(cv::Mat &depth, const cv::Mat &rgb){
     }
 }
 
-void removeLowConfidencePixels(cv::Mat &depth, const cv::Mat &confidence){
-    u_int32_t count;
-    for (int i = 0; i < confidence.rows; ++i){
-        for (int j = 0; j < confidence.cols; ++j){
-            unsigned short *pixel = (u_short*)confidence.ptr(i, j);
+void distanceFilter(cv::Mat &depth){
+    for (int i = 0; i < depth.rows; ++i){
+        for (int j = 0; j < depth.cols; ++j){
             unsigned short *pixelDepth = (u_short*)depth.ptr(i, j);
-//            cerr << *pixelDepth << endl;
-            if(*pixelDepth > bgr){
+            if(*pixelDepth > thres){
                 *pixelDepth = 0;
-                count++;
             }
         }
     }
-//    cerr << count << endl;
+}
+
+void removeLowConfidencePixels(cv::Mat &depth, const cv::Mat &confidence){    
+    for (int i = 0; i < confidence.rows; ++i){
+        for (int j = 0; j < confidence.cols; ++j){
+            unsigned short *pixelConf = (u_short*)confidence.ptr(i, j);
+            unsigned short *pixelDepth = (u_short*)depth.ptr(i, j);
+//            cerr << *pixelDepth << endl;
+            if(*pixelConf > 50){
+                *pixelDepth = 0;
+            }
+        }
+    }
 }
 
 
@@ -108,10 +116,14 @@ int main(int argc, char *argv[]) {
     Mat confidence;
 
     Mat depthDisplay;
+    Mat sobelDisplay;
 
     int frameCount = 0;
     bool recording = false;
 
+    Mat element = getStructuringElement(MORPH_RECT, Size(3,3));
+    Mat sobelx;
+    Mat sobely;
     while (true){
         Mat(240, 320, CV_16UC1, pixelsDepthAcq).copyTo(depth);
         Mat(240, 320, CV_8UC3, pixelsColorSync).copyTo(color);
@@ -119,23 +131,33 @@ int main(int argc, char *argv[]) {
         Mat(240, 320, CV_16UC1, pixelsConfidenceQVGA).copyTo(confidence);
 
         removeDepthWithoutColor(depth, color);
-        removeLowConfidencePixels(depth, confidence);
+        distanceFilter(depth);
+        Sobel(depth, sobelx, CV_16U, 1, 0, 3);
+        Sobel(depth, sobely, CV_16U, 0, 1, 3);
+        sobelx = sobelx * .5f + sobely * .5f;
+//        dilate(sobelx, sobelx, element);
+        removeLowConfidencePixels(depth, sobelx);
+        medianBlur(depth, depth, 3);
 
         depth.convertTo(depthDisplay, CV_8U, 0.5);
-
+        sobelx.convertTo(sobelDisplay, CV_8U, 0.5);
 
         imshow("depth", depthDisplay);
         imshow("color", color);
-        imshow("confidence", confidence);
-        moveWindow("depth", 0,0);
-        moveWindow("color", 320,0);
-        moveWindow("confidence", 640, 0);
+        imshow("confidence", sobelDisplay);
+        if(frameCount == 0){
+            moveWindow("depth", 0,0);
+            moveWindow("color", 320,0);
+            moveWindow("confidence", 640, 0);
+        }
+
         char key = waitKey(10);
         if(key == 27){
             break;
         }
         if(key == 'r'){
             recording = !recording;
+            cerr << "Record typed \n";
         }
         if(recording){
             std::stringstream ss;
@@ -151,15 +173,14 @@ int main(int argc, char *argv[]) {
             ss << ".png";
 
             cv::imwrite(ss.str(), color);
-            frameCount++;
         }
         if(key == '='){
-            bgr += 20;
+            thres += 20;
         }
         if(key == '-'){
-            bgr -= 20;
+            thres -= 20;
         }
-
+        frameCount++;
     }
 
     return 0;
